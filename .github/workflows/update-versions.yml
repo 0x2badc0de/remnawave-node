@@ -1,0 +1,136 @@
+name: Update upstream versions
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: update-upstream-versions
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve latest releases
+        id: versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          REMNA_VERSION="$(
+            gh api repos/remnawave/node/releases/latest \
+              --jq '.tag_name | ltrimstr("v")'
+          )"
+
+          XRAY_VERSION="$(
+            gh api repos/XTLS/Xray-core/releases/latest \
+              --jq '.tag_name | ltrimstr("v")'
+          )"
+
+          if [[ -z "${REMNA_VERSION}" ]]; then
+            echo "Could not resolve Remnawave Node version."
+            exit 1
+          fi
+
+          if [[ -z "${XRAY_VERSION}" ]]; then
+            echo "Could not resolve Xray version."
+            exit 1
+          fi
+
+          echo "remna=${REMNA_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "xray=${XRAY_VERSION}" >> "$GITHUB_OUTPUT"
+
+          echo "Remnawave Node: ${REMNA_VERSION}"
+          echo "Xray: ${XRAY_VERSION}"
+
+      - name: Verify upstream images
+        shell: bash
+        env:
+          REMNA_VERSION: ${{ steps.versions.outputs.remna }}
+          XRAY_VERSION: ${{ steps.versions.outputs.xray }}
+        run: |
+          set -euo pipefail
+
+          docker buildx imagetools inspect \
+            "ghcr.io/remnawave/node:${REMNA_VERSION}" \
+            >/dev/null
+
+          docker buildx imagetools inspect \
+            "ghcr.io/xtls/xray-core:${XRAY_VERSION}" \
+            >/dev/null
+
+          echo "Both upstream images are available."
+
+      - name: Update versions.env
+        id: update
+        shell: bash
+        env:
+          REMNA_VERSION: ${{ steps.versions.outputs.remna }}
+          XRAY_VERSION: ${{ steps.versions.outputs.xray }}
+        run: |
+          set -euo pipefail
+
+          cat > versions.env.new <<EOF
+          REMNA_VERSION=${REMNA_VERSION}
+          XRAY_VERSION=${XRAY_VERSION}
+          EOF
+
+          if cmp --silent versions.env versions.env.new; then
+            echo "Versions have not changed."
+            rm versions.env.new
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mv versions.env.new versions.env
+
+          echo "New versions:"
+          cat versions.env
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit updated versions
+        if: steps.update.outputs.changed == 'true'
+        shell: bash
+        env:
+          REMNA_VERSION: ${{ steps.versions.outputs.remna }}
+          XRAY_VERSION: ${{ steps.versions.outputs.xray }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add versions.env
+
+          git commit \
+            -m "chore: update Remnawave ${REMNA_VERSION}, Xray ${XRAY_VERSION}"
+
+          git push
+
+      - name: Start image build
+        if: steps.update.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run build.yml --ref "${GITHUB_REF_NAME}"
