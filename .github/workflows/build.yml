@@ -94,6 +94,20 @@ jobs:
             echo "Image does not exist: ${TARGET}"
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Restore image aliases
+        if: steps.check.outputs.exists == 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.versions.outputs.image }}
+          VERSION_TAG: ${{ steps.versions.outputs.version_tag }}
+          XRAY_VERSION: ${{ steps.versions.outputs.xray }}
+        run: |
+          set -euo pipefail
+      
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${XRAY_VERSION}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${VERSION_TAG}"
 
       - name: Build and push
         if: steps.check.outputs.exists != 'true'
