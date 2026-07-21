@@ -39,8 +39,12 @@ jobs:
           )"
 
           XRAY_VERSION="$(
-            gh api repos/XTLS/Xray-core/releases/latest \
-              --jq '.tag_name | ltrimstr("v")'
+            gh release list \
+              --repo XTLS/Xray-core \
+              --exclude-drafts \
+              --limit 100 \
+              --json tagName,publishedAt \
+              --jq 'sort_by(.publishedAt) | last | .tagName | ltrimstr("v")'
           )"
 
           if [[ -z "${REMNA_VERSION}" ]]; then
